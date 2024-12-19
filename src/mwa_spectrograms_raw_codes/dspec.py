@@ -1,11 +1,20 @@
 import numpy as np
 import os
-from casa_compat import import_casatools, import_casatasks
+import tarfile
+import tempfile
+import shutil
+
+from casaconfig import config
+print(config.measurespath)
+
+
+from mwa_spectrograms_raw_codes.casa_compat import import_casatools, import_casatasks
 tasks = import_casatasks('split','hanningsmooth')
 split = tasks.get('split')
 hanningsmooth = tasks.get('hanningsmooth')
 
 tools = import_casatools(['tbtool', 'mstool', 'qatool'])
+
 
 tbtool = tools['tbtool']
 mstool = tools['mstool']
@@ -95,6 +104,20 @@ def get_dspec(fname=None, specfile=None, bl='', uvrange='', field='', scan='',
     if verbose:
         print('Splitting selected data...')
 
+    # Extracting the tar file
+    # Create a temporary directory
+    temp_dir = tempfile.mkdtemp()
+    with tarfile.open(fname, 'r') as tar:
+        # Find the MS file
+        ms_files = [member for member in tar.getmembers() if member.name.endswith('.ms')]
+        
+        if not ms_files:
+            raise ValueError("No .ms files found in the tar archive.")
+        else:
+            tar.extractall(path=temp_dir)
+            fname = os.path.join(temp_dir, ms_files[0].name)
+            fname = os.path.normpath(fname)
+
     if usetbtool:
         if datacolumn.lower() == 'data':
             datacol = 'DATA'
@@ -115,7 +138,9 @@ def get_dspec(fname=None, specfile=None, bl='', uvrange='', field='', scan='',
         if hanning:
             hanningsmooth(vis=fname, datacolumn='data', field=field, outputvis=fname + '.tmpms')
             fname = fname + '.tmpms'
+        
         tb.open(fname)
+        #tb.open(fname)
         spwtb = tbtool()
         spwtb.open(fname + '/SPECTRAL_WINDOW')
         ptb = tbtool()
@@ -444,4 +469,8 @@ def get_dspec(fname=None, specfile=None, bl='', uvrange='', field='', scan='',
                 timeran=timeran, spw=spw, bl=bl, uvrange=uvrange, pol=pol)
     if verbose:
         print('Median dynamic spectrum saved as: ' + specfile)
+
+    # Clean up the temporary directory after your operations
+    shutil.rmtree(temp_dir)
+
     return specfile

@@ -1,15 +1,16 @@
 #!/bin/bash
-#SBATCH --job-name=stix-mwa
+#SBATCH --job-name=mwa
 #SBATCH --partition=performance
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --time=2-00:00:00
+#SBATCH --time=7-00:00:00
 #SBATCH --output=z_%J.log
 #SBATCH --error=z_%J.log
-#SBATCH --exclude=sdas2
 
 /bin/hostname
 
-export PYTHONPATH=/mnt/nas05/clusterdata01/home2/predrag/stix-mwa/src:$PYTHONPATH
+###export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-/home2/predrag/.conda/envs/stix-mwa/bin/python find_flares_in_mwa.py
+source /opt/conda/bin/activate casa_env
+
+srun python get_mwa_data_and_spectrograms.py

@@ -1,12 +1,17 @@
 """
 casa_compat.py
 
-Provides a uniform interface for importing CASA (Common Astronomy Software Applications) tools across different versions and Python environments. It supports both the monolithic (CASA 4/5/6) and modular (CASA 6+) installations.
+Provides a uniform interface for importing CASA (Common Astronomy Software Applications) tools 
+across different versions and Python environments. It supports both the monolithic (CASA 4/5/6) 
+and modular (CASA 6+) installations.
 
-This script dynamically imports CASA components, addressing the architectural changes between versions. In monolithic installations, components are available as instantiated objects. In modular installations, components are accessed through `casatools` and `casatasks`.
+This script dynamically imports CASA components, addressing the architectural changes between versions. 
+In monolithic installations, components are available as instantiated objects. In modular installations, 
+components are accessed through `casatools` and `casatasks`.
 
 Function:
-- get_casa_tools(alias_list): Returns a dictionary of requested CASA tool instances. It accepts a list of tool aliases and handles dynamic import or built-in object access, ensuring compatibility across CASA versions.
+- get_casa_tools(alias_list): Returns a dictionary of requested CASA tool instances. It accepts a list 
+of tool aliases and handles dynamic import or built-in object access, ensuring compatibility across CASA versions.
 
 Parameters:
 - alias_list (list of str): Aliases for CASA tools to import. Defaults to a common set of tools.
