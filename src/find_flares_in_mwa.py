@@ -5,6 +5,10 @@ import pytz
 from datetime import timedelta, time
 from astral import LocationInfo
 from astral.sun import sun
+from sunpy.coordinates.sun import earth_distance
+from sunpy.time import parse_time
+import astropy.units as u
+from astropy.constants import c
 
 
 path_to_data = "../data"
@@ -12,7 +16,7 @@ path_to_data = "../data"
 def main():
     mwa_data_name = "mwa_metadata.csv"
     stix_data_name = "STIX_flarelist_w_locations_20210214_20230901_version1.csv"
-    output_path = "../files/flares_recorded_by_mwa.csv"
+    output_path = "../data/flares_recorded_by_mwa.csv"    
 
     mwa_data = load_and_preprocess_mwa_data(os.path.join(path_to_data, mwa_data_name))
     stix_data = load_and_preprocess_stix_data(os.path.join(path_to_data, stix_data_name))
@@ -20,11 +24,13 @@ def main():
     mwa_filtered = filter_mwa_within_stix_timeframe(mwa_data, stix_data)
     mwa_location = LocationInfo("MWA", "Australia", "Australia/Perth", latitude=-26.7033, longitude=116.6708)
 
-    daytime_overlap_df, num_samples = analyze_flare_data(stix_data, mwa_filtered, mwa_location)
-    flares_100_df = find_flares_with_complete_daytime_overlap(daytime_overlap_df)
-    flares_100_with_projectids_df = add_mwa_project_and_obs_ids(flares_100_df, mwa_data)
+    flares_df, num_samples = analyze_flare_data(stix_data, mwa_filtered, mwa_location)
+    flares_df = find_flares_with_overlap(flares_df, overlap_percentage=1)
+    flares_df = flares_df[['flare_id', 'flare_class_GOES', 'flare_start_UTC', 'flare_end_UTC', 'flare_start_UTC_corrected', 'flare_end_UTC_corrected', 'flare_duration_sec', 'total_overlap_percentage']].reset_index(drop=True)
+    flares_df = flares_df.sort_values(by='total_overlap_percentage', ascending=False, ignore_index=True)
+    flares_df = add_mwa_project_and_obs_ids(flares_df, mwa_data)
 
-    flares_100_with_projectids_df.to_csv(output_path, index=False)
+    flares_df.to_csv(output_path, index=False)
     for key, value in num_samples.items():
         print(f"{key}: {value}")
 
@@ -39,30 +45,43 @@ def load_and_preprocess_mwa_data(filepath):
     )
     return mwa
 
+
 def load_and_preprocess_stix_data(filepath):
     stix = pd.read_csv(filepath)
     stix['start_UTC'] = pd.to_datetime(stix['start_UTC']).dt.tz_localize('UTC')
     stix['end_UTC'] = pd.to_datetime(stix['end_UTC']).dt.tz_localize('UTC')
     stix = stix[stix['visible_from_earth']].reset_index(drop=True)
-    stix['corrected_start_UTC'] = stix['start_UTC'] + pd.to_timedelta(stix['light_travel_time'], unit='s')
-    stix['corrected_end_UTC'] = stix['end_UTC'] + pd.to_timedelta(stix['light_travel_time'], unit='s')
+    time_in_seconds = calculate_time_correction(stix)
+    stix['time_correction'] = time_in_seconds
+    stix['corrected_start_UTC'] = stix['start_UTC'] + pd.to_timedelta(stix['time_correction'], unit='s')
+    stix['corrected_end_UTC'] = stix['end_UTC'] + pd.to_timedelta(stix['time_correction'], unit='s')
     stix['flare_duration_sec'] = (stix['corrected_end_UTC'] - stix['corrected_start_UTC']).dt.total_seconds()
     return stix
+
+
+def calculate_time_correction(stix_data):
+    # the time you want to calculate it at
+    time = parse_time(stix_data['peak_UTC']).datetime
+
+    # ensure earth_distance(time) is an Astropy Quantity in AU
+    earth_distance_AU = u.Quantity(earth_distance(time), u.AU)
+
+    # ensure STIX data is a compatible Quantity
+    stix_distance_AU = u.Quantity(stix_data['solo_position_AU_distance'], u.AU)
+
+    # get the difference
+    diff = earth_distance_AU - stix_distance_AU
+
+    # convert to meters and divide by the speed of light
+    time_in_seconds = (diff.to(u.m) / c)
+    return time_in_seconds.value # .value removes units (seconds) from the array
+
 
 def filter_mwa_within_stix_timeframe(mwa, stix):
     stix_min_time = stix['corrected_start_UTC'].min()
     stix_max_time = stix['corrected_end_UTC'].max()
     return mwa[(mwa['stoptime_utc'] >= stix_min_time) & (mwa['starttime_utc'] <= stix_max_time)]
 
-def calculate_sunrise_sunset(mwa_location, unique_dates):
-    sunrise_sunset = {}
-    for date in unique_dates:
-        times = sun(mwa_location.observer, date=date, tzinfo=pytz.UTC)
-        sunrise, sunset = times['sunrise'], times['sunset']
-        adjusted_sunrise = sunrise - timedelta(days=1) if sunset.hour < sunrise.hour else sunrise
-        adjusted_sunset = sunset + timedelta(days=1) if sunset.hour < sunrise.hour else sunset
-        sunrise_sunset[date] = (adjusted_sunrise, adjusted_sunset)
-    return sunrise_sunset
 
 def calculate_overlap(mwa_filtered, flare_start, flare_end, mwa_location):
     mwa_relevant = mwa_filtered[
@@ -88,6 +107,7 @@ def calculate_overlap(mwa_filtered, flare_start, flare_end, mwa_location):
 
     return total_overlap, daytime_overlap
 
+
 def analyze_flare_data(stix, mwa_filtered, mwa_location):
     time_overlap_data = []
     num_samples = {f'matching {i*10}-{(i+1)*10}%': 0 for i in range(10)}
@@ -105,11 +125,13 @@ def analyze_flare_data(stix, mwa_filtered, mwa_location):
             'flare_class_GOES': flare_row['GOES_class_time_of_flare'],
             'flare_start_UTC': flare_row['start_UTC'],
             'flare_end_UTC': flare_row['end_UTC'],
+            'flare_start_UTC_corrected': flare_row['corrected_start_UTC'],
+            'flare_end_UTC_corrected': flare_row['corrected_end_UTC'],
             'flare_duration_sec': int(flare_duration),
             'overlap_with_mwa_duration_sec': int(total_overlap.total_seconds()),
             'overlap_with_mwa_duration_percentage': overlap_percentage,
-            'daytime_overlap_duration_sec': int(daytime_overlap.total_seconds()),
-            'daytime_overlap_duration_percentage': daytime_overlap_percentage
+            'total_overlap_duration_sec': int(daytime_overlap.total_seconds()),
+            'total_overlap_percentage': daytime_overlap_percentage
         })
 
         if daytime_overlap_percentage > 0:
@@ -120,21 +142,24 @@ def analyze_flare_data(stix, mwa_filtered, mwa_location):
 
     return pd.DataFrame(time_overlap_data), num_samples
 
-def find_flares_with_complete_daytime_overlap(daytime_overlap_df):
-    flares_with_100_percent = daytime_overlap_df[daytime_overlap_df['daytime_overlap_duration_percentage'] == 100]
-    return flares_with_100_percent[['flare_id', 'flare_class_GOES', 'flare_start_UTC', 'flare_end_UTC']].reset_index(drop=True)
+
+def find_flares_with_overlap(df, overlap_percentage):
+    df = df[df['total_overlap_percentage'] >= overlap_percentage]
+    return df
+
 
 def add_mwa_project_and_obs_ids(flares_df, mwa_data):
     flares_df['projectids'] = [[] for _ in range(len(flares_df))]
     flares_df['obs_ids'] = [[] for _ in range(len(flares_df))]
     
     for idx, row in flares_df.iterrows():
-        flare_start, flare_end = pd.to_datetime(row['flare_start_UTC']), pd.to_datetime(row['flare_end_UTC'])
+        flare_start, flare_end = pd.to_datetime(row['flare_start_UTC_corrected']), pd.to_datetime(row['flare_end_UTC_corrected'])
         matching_data = mwa_data[(mwa_data['starttime_utc'] <= flare_end) & (mwa_data['stoptime_utc'] >= flare_start)]
         flares_df.at[idx, 'projectids'] = matching_data['projectid'].tolist()
         flares_df.at[idx, 'obs_ids'] = matching_data['obs_id'].tolist()
         
     return flares_df
+
 
 if __name__ == "__main__":
     main()

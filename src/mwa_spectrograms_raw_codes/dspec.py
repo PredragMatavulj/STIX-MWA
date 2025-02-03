@@ -253,7 +253,9 @@ def get_dspec(fname=None, specfile=None, bl='', uvrange='', field='', scan='',
         if verbose:
             print("npol, nf, nt, nbl:", npol, nf, nt, nbl)
         if order == 't':
-            specamp = np.zeros((npol, nf, nbl, nt), complex)
+            # specamp = np.zeros((npol, nf, nbl, nt), complex)
+            specamp = np.zeros((npol, nf, nbl, nt), dtype=np.complex64)
+
             flagf = np.zeros((npol, nf, nbl, nt), int)
             for j in range(nt):
                 fptr = 0
@@ -460,6 +462,9 @@ def get_dspec(fname=None, specfile=None, bl='', uvrange='', field='', scan='',
             ospec = ospec * 1e4
     else:
         ospec = spec
+
+
+    """
     # Save the dynamic spectral data
     if not specfile:
         specfile = msfile + '.dspec.npz'
@@ -469,8 +474,14 @@ def get_dspec(fname=None, specfile=None, bl='', uvrange='', field='', scan='',
                 timeran=timeran, spw=spw, bl=bl, uvrange=uvrange, pol=pol)
     if verbose:
         print('Median dynamic spectrum saved as: ' + specfile)
+    """
+
+    dspec_entity = {
+        "spec": np.mean(np.abs(ospec), axis=(0, 1)),      # The spectrogram data
+        "freq": freq,       # Frequency axis
+    }
 
     # Clean up the temporary directory after your operations
     shutil.rmtree(temp_dir)
 
-    return specfile
+    return dspec_entity

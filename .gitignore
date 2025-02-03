@@ -1,4 +1,7 @@
 data/
+files/times_of_execution/
+files/plots/other_plots/
 src/z
 *.log
 .env
+src/helper_functions/
