@@ -1,7 +1,7 @@
-data/
-files/times_of_execution/
-files/plots/other_plots/
+info/
+files/
 src/z
 *.log
 .env
-src/helper_functions/
+src/_other_functions/
+src/manta-ray-client

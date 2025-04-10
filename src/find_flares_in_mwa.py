@@ -2,6 +2,7 @@ import os
 import time
 import pandas as pd
 import pytz
+import pyvo
 from datetime import timedelta, time
 from astral import LocationInfo
 from astral.sun import sun
@@ -11,15 +12,13 @@ import astropy.units as u
 from astropy.constants import c
 
 
-path_to_data = "../data"
-
 def main():
-    mwa_data_name = "mwa_metadata.csv"
+    info_path = "../info"
     stix_data_name = "STIX_flarelist_w_locations_20210214_20230901_version1.csv"
-    output_path = "../data/flares_recorded_by_mwa.csv"    
+    save_file_name = "flares_recorded_by_mwa.csv"    
 
-    mwa_data = load_and_preprocess_mwa_data(os.path.join(path_to_data, mwa_data_name))
-    stix_data = load_and_preprocess_stix_data(os.path.join(path_to_data, stix_data_name))
+    mwa_data = load_and_preprocess_mwa_data(save=False, path_to_save=info_path)
+    stix_data = load_and_preprocess_stix_data(os.path.join(info_path, stix_data_name))
 
     mwa_filtered = filter_mwa_within_stix_timeframe(mwa_data, stix_data)
     mwa_location = LocationInfo("MWA", "Australia", "Australia/Perth", latitude=-26.7033, longitude=116.6708)
@@ -30,13 +29,19 @@ def main():
     flares_df = flares_df.sort_values(by='total_overlap_percentage', ascending=False, ignore_index=True)
     flares_df = add_mwa_project_and_obs_ids(flares_df, mwa_data)
 
-    flares_df.to_csv(output_path, index=False)
+    flares_df.to_csv(os.path.join(info_path, save_file_name), index=False)
     for key, value in num_samples.items():
         print(f"{key}: {value}")
 
 
-def load_and_preprocess_mwa_data(filepath):
-    mwa = pd.read_csv(filepath, low_memory=False)
+def load_and_preprocess_mwa_data(save=False, path_to_save="../data"):
+    tap_service = pyvo.dal.TAPService("http://vo.mwatelescope.org/mwa_asvo/tap")
+    query = "SELECT * FROM mwa.observation"
+    result = tap_service.search(query)
+    mwa = result.to_table().to_pandas()
+    if save:
+        mwa.to_csv(os.path.join(path_to_save, "mwa_metadata.csv"), index=False)
+
     mwa['starttime_utc'] = pd.to_datetime(mwa['starttime_utc']).apply(
         lambda x: x.tz_convert('UTC') if x.tzinfo else x.tz_localize('UTC')
     )

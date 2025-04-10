@@ -3,18 +3,14 @@ import os
 import tarfile
 import tempfile
 import shutil
-
-from casaconfig import config
-print(config.measurespath)
+from helper_functions.casa_compat import import_casatools, import_casatasks
 
 
-from mwa_spectrograms_raw_codes.casa_compat import import_casatools, import_casatasks
 tasks = import_casatasks('split','hanningsmooth')
 split = tasks.get('split')
 hanningsmooth = tasks.get('hanningsmooth')
 
 tools = import_casatools(['tbtool', 'mstool', 'qatool'])
-
 
 tbtool = tools['tbtool']
 mstool = tools['mstool']
@@ -121,10 +117,10 @@ def get_dspec(fname=None, specfile=None, bl='', uvrange='', field='', scan='',
     if usetbtool:
         if datacolumn.lower() == 'data':
             datacol = 'DATA'
-            print('Using DATA column')
+            #print('Using DATA column')
         if datacolumn.lower() == 'corrected':
             datacol = 'CORRECTED_DATA'
-            print('Using CORRECTED_DATA column')
+            #print('Using CORRECTED_DATA column')
         if verbose:
             print('using table tool to extract the data')
         try:
@@ -463,6 +459,8 @@ def get_dspec(fname=None, specfile=None, bl='', uvrange='', field='', scan='',
     else:
         ospec = spec
 
+    # take the XX and YY polarisations
+    ospec = (ospec[0] + ospec[3]) / 2
 
     """
     # Save the dynamic spectral data
@@ -477,7 +475,7 @@ def get_dspec(fname=None, specfile=None, bl='', uvrange='', field='', scan='',
     """
 
     dspec_entity = {
-        "spec": np.mean(np.abs(ospec), axis=(0, 1)),      # The spectrogram data
+        "spec": np.mean(np.abs(ospec), axis=0),      # The spectrogram data
         "freq": freq,       # Frequency axis
     }
 
