@@ -5,26 +5,51 @@ import matplotlib.pyplot as plt
 from matplotlib.dates import AutoDateLocator, ConciseDateFormatter
 from dotenv import load_dotenv
 from stixdcpy.quicklook import LightCurves
-from helper_functions.dspec import get_dspec
+from helper_functions.dspec import get_dspec2 as get_dspec
 import rootutils
 from pathlib import Path
 import pyvo
 from datetime import datetime, timezone
 from dateutil import parser
 from matplotlib.gridspec import GridSpec
+import find_flares_in_mwa
 
 
 def main():
+    """
+    Plot light curves and spectrograms for flares. 
+    If observations contain a list of observations, it will plot the combined spectrogram for those observations.
+    If not, it will plot the light curves and spectrograms for the flares listed in the CSV file.
+    """
     setup_environment()
-    flare_data = pd.read_csv('../info/flares_recorded_by_mwa.csv')
-    save_folder = '../files/plots/spectrograms_and_light_curves'
+    info_path = '../info'
 
-    for i, flare_row in flare_data.iterrows():
-        try:
-            save_path = os.path.join(save_folder, f"{i}_flare_{flare_row['flare_id']}")
-            plot_flare(flare_row, save_path)
-        except Exception as e:
-            print(f"Error in processing flare {i}: {e}")
+    flares_in_mwa = 'flares_recorded_by_mwa.csv'
+     # if the file is not found, run the find_flares_in_mwa script to create it
+    if flares_in_mwa not in os.listdir(info_path):
+        find_flares_in_mwa.main()
+    flare_data = pd.read_csv(os.path.join(info_path, flares_in_mwa))
+    
+    observations = ['1126847624']
+
+    if observations:
+        save_folder = '../files/plots/spectrograms'
+
+        save_name = 'spec_obs'
+        for obs_id in observations:
+            save_name += f"_{obs_id}"
+
+        save_path = os.path.join(save_folder, save_name)
+        plot_flare(save_path=save_path, obs_ids=observations)
+    else:
+        save_folder = '../files/plots/spectrograms_and_light_curves'
+
+        for i, flare_row in flare_data.iterrows():
+            try:
+                save_path = os.path.join(save_folder, f"{i}_flare_{flare_row['flare_id']}")
+                plot_flare(save_path=save_path, row=flare_row)
+            except Exception as e:
+                print(f"\n Error in processing flare {i}: {e}")
 
 
 def setup_environment():
@@ -34,15 +59,28 @@ def setup_environment():
     ROOT_PATH_TO_DATA = Path(os.getenv("ROOT_PATH_TO_DATA", "default/path/to/data"))
 
 
-def plot_flare(row, save_path):
+def plot_flare(save_path, row=None, obs_ids=None):
     fig = plt.figure(figsize=(10, 8))
     gs = GridSpec(2, 2, width_ratios=[1, 0.05], height_ratios=[1, 1])
 
-     # Use the first column for the actual plots
     ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[1, 0]) 
-    plot_light_curve(row, ax1, energy_range=(0, 4))
-    plot_spectrogram(row, ax2, fig, gs)
+    ax2 = fig.add_subplot(gs[1, 0])
+
+    if row is not None:
+        plot_light_curve(row, ax1, energy_range=(0, 4))
+        plot_spectrogram(row, ax2, fig, gs)
+    elif obs_ids is not None:
+        mwa_metadata = get_mwa_metadata(obs_ids=obs_ids)
+        spec, times, freqs = get_spectrogram(mwa_metadata)
+        if spec is None:
+            ax2.text(0.5, 0.5, 'MWA spectrogram not available!', ha='center', va='center')
+        else:
+            im = draw_spectrogram(spec, times, freqs, ax2)
+            cbar_ax = fig.add_subplot(gs[1, 1])
+            plt.colorbar(im, cax=cbar_ax, label='Power')
+            ax2.set_title('Dynamic Spectrum from MWA observations')
+        ax1.axis('off')  # hide the top subplot since there's no light curve
+
     finalize_plot(fig, save_path)
 
 
@@ -75,34 +113,40 @@ def load_light_curve(start_utc, end_utc):
     try:
         return LightCurves.from_sdc(start_utc, end_utc, ltc=True)
     except Exception as e:
-        print(f"Error loading light curves: {e}")
+        print(f"\n Error loading light curves: {e}")
         return None
 
 
 def plot_spectrogram(row, ax, fig, gs):
     start_time = row["flare_start_UTC_corrected"]
     end_time = row["flare_end_UTC_corrected"]
-    mwa_metadata = get_mwa_metadata(start_time, end_time)
+    mwa_metadata = get_mwa_metadata(start_time=start_time, end_time=end_time)
 
     spec, times, freqs = get_spectrogram(mwa_metadata)
     if spec is None:
         ax.text(0.5, 0.5, 'MWA spectrogram not available!', ha='center', va='center')
         return ax
 
-     # convert time strings to datetime objects, handling ISO format with timezone
+    im = draw_spectrogram(spec, times, freqs, ax)
+
+    cbar_ax = fig.add_subplot(gs[1, 1])
+    plt.colorbar(im, cax=cbar_ax)
+    ax.set_title('Dynamic Spectrum from MWA observations')
+
+
+def draw_spectrogram(spec, times, freqs, ax=None):
+     # parse times
     times = [(parser.parse(start), parser.parse(end)) for start, end in times]
 
-     # prepare the time axis with gaps represented as breaks (using NaNs) (if there are any missing observations)
+    # Prepare time axis
     time_axis = []
     num_columns = spec.shape[1]
-    columns_per_segment = num_columns // len(times)  # calculate columns per segment roughly
+    columns_per_segment = num_columns // len(times)
     current_column = 0
 
     for start, end in times:
-        if current_column > 0:  # if not the first segment
-             # add a NaN gap before starting new segment
+        if current_column > 0:
             time_axis.extend([np.nan] * columns_per_segment)
-         # create a time range for the current segment
         segment_time = np.linspace(start.timestamp(), end.timestamp(), columns_per_segment)
         time_axis.extend(segment_time)
         current_column += columns_per_segment
@@ -111,48 +155,51 @@ def plot_spectrogram(row, ax, fig, gs):
     valid_times = ~np.isnan(time_axis)
     time_axis = [datetime.fromtimestamp(t, timezone.utc) for t in time_axis[valid_times]]
 
+    if ax is None:
+        ax = plt.gca()
+
     im = ax.imshow(spec, aspect='auto', origin='lower', extent=[min(time_axis), max(time_axis), freqs[0], freqs[-1]])
     ax.set_ylabel('Frequency [MHz]')
     ax.set_xlabel('Time UTC')
-    
-     # adding a colorbar only next to the first subplot
-    cbar_ax = fig.add_subplot(gs[1, 1])  # Colorbar position
-    plt.colorbar(im, cax=cbar_ax, label='Power')
 
-    # Adjust y-axis tick labels to display frequencies in MHz
     yticks = ax.get_yticks()
-    valid_yticks = [ytick for ytick in yticks if freqs[0] <= ytick <= freqs[-1]]  # Filter ticks within frequency range
-    ax.set_yticks(valid_yticks)  # Explicitly set the valid tick positions
-    ax.set_yticklabels([f"{ytick / 1e6:.0f}" for ytick in valid_yticks])  # Convert to MHz and format
+    valid_yticks = [ytick for ytick in yticks if freqs[0] <= ytick <= freqs[-1]]
+    ax.set_yticks(valid_yticks)
 
-    # Set xticks at the beginning, end, and two in the middle
     xticks = [time_axis[0], time_axis[len(time_axis) // 3], time_axis[2 * len(time_axis) // 3], time_axis[-1]]
     ax.set_xticks(xticks)
-    ax.set_xticklabels([t.strftime('%H:%M:%S') for t in xticks])  # Format x-tick labels
+    ax.set_xticklabels([t.strftime('%H:%M:%S') for t in xticks])
 
-    # Add the date next to the x-axis ticks, right bottom before x label
     date_str = time_axis[0].strftime('%Y-%m-%d')
     ax.annotate(date_str, xy=(1, -0.1), xycoords='axes fraction', ha='right', fontsize=10)
 
-    ax.set_title('Dynamic Spectrum from MWA observations')
+    return im
 
 
-def get_mwa_metadata(start_time, end_time):
-     
+def get_mwa_metadata(start_time=None, end_time=None, obs_ids=None):
     tap_service = pyvo.dal.TAPService("http://vo.mwatelescope.org/mwa_asvo/tap")
-    query = f"""
-    SELECT * FROM mwa.observation
-    WHERE stoptime_utc >= '{format_time(start_time)}' 
-    AND starttime_utc <= '{format_time(end_time)}'
-    """
 
+     # define the query based on the input parameters
+    if obs_ids is not None:
+        ids_formatted = ', '.join(f"'{id}'" for id in obs_ids)
+        query = f"SELECT * FROM mwa.observation WHERE obs_id IN ({ids_formatted})"
+    elif start_time is not None and end_time is not None:
+        query = f"""
+        SELECT * FROM mwa.observation
+        WHERE stoptime_utc >= '{format_time(start_time)}'
+        AND starttime_utc <= '{format_time(end_time)}'
+        """
+    else:
+        raise ValueError("Invalid parameters. Provide either 'obs_id' or both 'start_time' and 'end_time'.")
+
+     # execute the query
     result = tap_service.search(query)
-    mwa_metadata = result.to_table().to_pandas()    # contains all observations for a specific flare
-    print(f"Number of found observations is {len(mwa_metadata)}")
+    mwa_metadata = result.to_table().to_pandas()  # Converts the result to a pandas DataFrame
 
+    print(f"\n Number of found observations is {len(mwa_metadata)}")    
     if mwa_metadata.empty:
-        raise ValueError("No MWA observations found for the specified time range.")
-    
+        raise ValueError("No MWA observations found for the specified criteria.")
+
     return mwa_metadata
 
 
@@ -177,21 +224,21 @@ def get_spectrogram(mwa_metadata):
         data_file_path = get_raw_data_file_path(obs_id)
         if data_file_path is None:
             unprocessed.append(obs_id)
-            print(f" \n No data found for observation {obs_id}.")
+            print(f"\n No data found for observation {obs_id}.")
             continue
 
         try:
             dspec = get_dspec(fname=data_file_path, domedian=True)
         except Exception as e:
             unprocessed.append(obs_id)
-            print(f" \n Error creating spectrogram for observation {obs_id}: {e}")
+            print(f"\n Error creating spectrogram for observation {obs_id}: {e}")
             continue
 
         spectrograms.append(dspec)
         processed.append(obs_id)
         times.append((last_processed_time or start_time, end_time))
         last_processed_time = end_time
-        print(f" \n Successfully processed observation {obs_id}.")
+        print(f"\n Successfully processed observation {obs_id}.")
 
     # merge spectrograms and plot if any were successfully created
     spec, time, freq = None, None, None
@@ -199,9 +246,9 @@ def get_spectrogram(mwa_metadata):
         try:
             spec, time, freq = merge_spectrograms(spectrograms, times)
         except Exception as e:
-            print(f" \n Error merging or plotting spectrograms: {e}")
+            print(f"\n Error merging or plotting spectrograms: {e}")
     else:
-        print(" \n No spectrograms were successfully created.")
+        print("\n No spectrograms were successfully created.")
 
     return spec, time, freq
 
