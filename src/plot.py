@@ -60,32 +60,34 @@ def setup_environment():
 
 
 def plot_flare(save_path, row=None, obs_ids=None):
-    fig = plt.figure(figsize=(10, 8))
-    gs = GridSpec(2, 2, width_ratios=[1, 0.05], height_ratios=[1, 1])
+    fig = plt.figure(figsize=(10, 12))
+    gs = GridSpec(3, 2, width_ratios=[1, 0.05], height_ratios=[1, 1, 1])
 
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[1, 0])
+    ax3 = fig.add_subplot(gs[2, 0])
 
     if row is not None:
-        plot_light_curve(row, ax1, energy_range=(0, 4))
-        plot_spectrogram(row, ax2, fig, gs)
+        plot_stix_light_curve(row, ax1, energy_range=(0, 4))
+        spec, time_axis = plot_mwa_spectrogram(row, ax2, fig, gs)
     elif obs_ids is not None:
         mwa_metadata = get_mwa_metadata(obs_ids=obs_ids)
         spec, times, freqs = get_spectrogram(mwa_metadata)
         if spec is None:
             ax2.text(0.5, 0.5, 'MWA spectrogram not available!', ha='center', va='center')
         else:
-            im = draw_spectrogram(spec, times, freqs, ax2)
+            im, time_axis = draw_mwa_spectrogram(spec, times, freqs, ax2)
             cbar_ax = fig.add_subplot(gs[1, 1])
             plt.colorbar(im, cax=cbar_ax, label='Power')
             ax2.set_title('Dynamic Spectrum from MWA observations')
         ax1.axis('off')  # hide the top subplot since there's no light curve
 
+    plot_mwa_light_curve(spec, time_axis, ax=ax3)
     finalize_plot(fig, save_path)
 
 
-def plot_light_curve(row, ax, energy_range):
-    light_curve = load_light_curve(row['flare_start_UTC'], row['flare_end_UTC'])
+def plot_stix_light_curve(row, ax, energy_range):
+    light_curve = load_stix_light_curve(row['flare_start_UTC'], row['flare_end_UTC'])
 
     if not light_curve.data and not light_curve:
         ax.text(0.5, 0.5, 'LC not available!', ha='center', va='center')
@@ -109,7 +111,7 @@ def plot_light_curve(row, ax, energy_range):
     return ax
 
 
-def load_light_curve(start_utc, end_utc):
+def load_stix_light_curve(start_utc, end_utc):
     try:
         return LightCurves.from_sdc(start_utc, end_utc, ltc=True)
     except Exception as e:
@@ -117,7 +119,7 @@ def load_light_curve(start_utc, end_utc):
         return None
 
 
-def plot_spectrogram(row, ax, fig, gs):
+def plot_mwa_spectrogram(row, ax, fig, gs):
     start_time = row["flare_start_UTC_corrected"]
     end_time = row["flare_end_UTC_corrected"]
     mwa_metadata = get_mwa_metadata(start_time=start_time, end_time=end_time)
@@ -127,18 +129,19 @@ def plot_spectrogram(row, ax, fig, gs):
         ax.text(0.5, 0.5, 'MWA spectrogram not available!', ha='center', va='center')
         return ax
 
-    im = draw_spectrogram(spec, times, freqs, ax)
+    im, time_axis = draw_mwa_spectrogram(spec, times, freqs, ax)
 
     cbar_ax = fig.add_subplot(gs[1, 1])
     plt.colorbar(im, cax=cbar_ax)
     ax.set_title('Dynamic Spectrum from MWA observations')
+    return spec, time_axis
 
 
-def draw_spectrogram(spec, times, freqs, ax=None):
+def draw_mwa_spectrogram(spec, times, freqs, ax=None):
      # parse times
     times = [(parser.parse(start), parser.parse(end)) for start, end in times]
 
-    # Prepare time axis
+     # prepare time axis
     time_axis = []
     num_columns = spec.shape[1]
     columns_per_segment = num_columns // len(times)
@@ -173,7 +176,7 @@ def draw_spectrogram(spec, times, freqs, ax=None):
     date_str = time_axis[0].strftime('%Y-%m-%d')
     ax.annotate(date_str, xy=(1, -0.1), xycoords='axes fraction', ha='right', fontsize=10)
 
-    return im
+    return im, time_axis
 
 
 def get_mwa_metadata(start_time=None, end_time=None, obs_ids=None):
@@ -194,7 +197,7 @@ def get_mwa_metadata(start_time=None, end_time=None, obs_ids=None):
 
      # execute the query
     result = tap_service.search(query)
-    mwa_metadata = result.to_table().to_pandas()  # Converts the result to a pandas DataFrame
+    mwa_metadata = result.to_table().to_pandas()  # converts the result to a pandas DataFrame
 
     print(f"\n Number of found observations is {len(mwa_metadata)}")    
     if mwa_metadata.empty:
@@ -251,6 +254,29 @@ def get_spectrogram(mwa_metadata):
         print("\n No spectrograms were successfully created.")
 
     return spec, time, freq
+
+
+def plot_mwa_light_curve(spec, time_axis, ax=None):
+    """
+    plots the integrated mwa light curve using a shared time axis
+    """
+    light_curve = np.ma.sum(spec, axis=0)  # shape: (time,)
+
+    if ax is None:
+        ax = plt.gca()
+
+    ax.plot(time_axis, light_curve)
+    ax.set_xlim(time_axis[0], time_axis[-1])
+    ax.set_title("Integrated MWA light curve")
+    ax.set_ylabel("Total intensity (log scale)")
+    ax.set_xlabel("Time UTC")
+
+    locator = AutoDateLocator(minticks=3, maxticks=7)
+    formatter = ConciseDateFormatter(locator)
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
+
+    return ax
 
 
 def get_raw_data_file_path(obs_id):
