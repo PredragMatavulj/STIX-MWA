@@ -20,6 +20,7 @@ def main():
     plots data based on provided observation ids or STIX flares matched with mwa metadata.
     """
     observations = ['1126847624']  # set to [] to use flare list
+    observations = []
 
     if observations:
         save_folder = '../files/plots/spectrograms'
@@ -70,7 +71,8 @@ def plot_by_flarelist(flare_range=None):
             if flare_range and not (flare_range[0] <= i < flare_range[1]):
                 continue
 
-            logging.info(f"***** Processing flare {i} with ID {flare_row['flare_id']} *****")
+            logging.info(f"***************************************")
+            logging.info(f"Processing flare {i+2} with ID {flare_row['flare_id']}")
             try:
                 save_path = os.path.join(save_folder, f"{i+2}_flareID_{flare_row['flare_id']}")
                 should_stop = plot_flare(save_path=save_path, row=flare_row)
@@ -186,6 +188,8 @@ def plot_mwa_spectrogram(flare_row, ax, fig, gs, path_to_data):
     spec, times, freqs = get_spectrogram(mwa_metadata, path_to_data)
     if spec is None or not times or not times[0]:
         return ax, []
+    
+    logging.info(times)
 
     im, time_axis = draw_mwa_spectrogram(spec, times, freqs, ax, start_time, end_time)
 
@@ -202,7 +206,7 @@ def draw_mwa_spectrogram(spec, times, freqs, ax, start_cut, end_cut, time_res=4)
     draws mwa spectrogram using fixed 4s resolution and time-aligned x-axis, including gaps
     """
     start_time = safe_parse_time(times[0][0])
-    end_time = safe_parse_time(times[0][1])
+    end_time = safe_parse_time(times[-1][-1])
     num_cols = spec.shape[1]
 
      # generate equally spaced time axis between start_time and end_time

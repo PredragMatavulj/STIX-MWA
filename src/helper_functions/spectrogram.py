@@ -24,6 +24,7 @@ def get_spectrogram(mwa_metadata, path_to_data):
         spectrograms.append(dspec)
         times.append(time_range)
         processed_ids.append(row['obs_id'])
+        logging.info(f"Processed observation {row['obs_id']}")
 
     if not spectrograms:
         return None, None, None
