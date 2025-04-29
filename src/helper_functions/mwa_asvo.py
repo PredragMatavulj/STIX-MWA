@@ -1,17 +1,53 @@
 import os
 import ssl
-from mantaray.scripts.mwa_client import submit_jobs, status_func, download_func, notify_func
-from mantaray.api import Session, Notify
+import rootutils
+from pathlib import Path
+from dotenv import load_dotenv
 from queue import Queue, Empty
 from threading import Thread, RLock
-from dotenv import load_dotenv
-import rootutils
+from helper_functions.utils import get_root_path_to_data
+from mantaray.api import Session, Notify
+from mantaray.scripts.mwa_client import submit_jobs, status_func, download_func, notify_func
+
+
+def create_jobs(observations, time_resolution=4, freq_resolution=160):
+    """
+    creates a list of job specifications for the mwa asvo jobs based on observation ids
+    """
+    return [
+        (
+            'submit_conversion_job_direct',
+            {
+                'obs_id': obs_id,
+                'job_type': 'c',
+                'avg_time_res': time_resolution,
+                'avg_freq_res': freq_resolution,
+                'output': 'ms',
+            }
+        )
+        for obs_id in observations
+    ]
+
+
+def process_mwa_asvo_jobs(jobs):
+    """
+    processes a list of jobs by initializing the settings, submitting, and downloading the results
+    """
+    data_path = get_root_path_to_data()
+    params, sslopt, verbose = initialize_settings()
+    submit_lock, download_queue, result_queue, status_queue = initialize_queues_and_locks()
+    session, jobs_list = login_and_submit_jobs(params, download_queue, status_queue, jobs)
+    start_status_thread(status_queue)
+    notify = initialize_notifier(params, sslopt, submit_lock, jobs_list, download_queue, result_queue, status_queue, verbose)
+    threads = start_download_threads(submit_lock, jobs_list, download_queue, result_queue, status_queue, session, data_path)
+    results = handle_results(submit_lock, jobs_list, result_queue, download_queue, threads)
+    cleanup(notify, threads, result_queue, status_queue, results)
 
 
 def initialize_settings():
     """Sets up the necessary environment for the project."""
      # setup project root and load environment variables
-    rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+    rootutils.setup_root(Path(__file__).resolve(), indicator=".project-root", pythonpath=True)
     load_dotenv()
 
     SERVER_URL = os.getenv("SERVER_URL", "asvo.mwatelescope.org")

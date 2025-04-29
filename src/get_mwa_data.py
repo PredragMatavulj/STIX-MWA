@@ -1,111 +1,114 @@
 import os
-import time
 import ast
 import pandas as pd
-import rootutils
-from pathlib import Path
-from dotenv import load_dotenv
 import find_flares_in_mwa
-from helper_functions.utils_mwa_asvo import initialize_settings, initialize_queues_and_locks, login_and_submit_jobs, start_status_thread, initialize_notifier, start_download_threads, handle_results, cleanup
+from helper_functions.utils import get_root_path_to_data
+from helper_functions.mwa_asvo import create_jobs, process_mwa_asvo_jobs
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 def main():
     """
-    Find and download MWA data.
-    If no observations are provided, it will find and download MWA data corresponding to flares obtained by STIX data.
+    download mwa data based on provided observation ids or flares matched with mwa metadata.
     """
-    setup_environment()
+    info_path = '../info'
+    observation_ids = ['1126847624']  # set to [] to use flare list
 
-    time_resolution = 60
-    freq_resolution = 240
-    observations = ['1126847624']  # Example observation ID
-
-    if observations:
-        download_mwa_data_based_on_observations(observations, time_resolution, freq_resolution)
+    if observation_ids:
+        download_by_obs_ids(observation_ids)
     else:
-        info_path = '../info'
-        flares_in_mwa = 'flares_recorded_by_mwa.csv'
-         # if the file is not found, run the find_flares_in_mwa script to create it
-        if flares_in_mwa not in os.listdir(info_path):
+        download_by_flare_overlap(info_path, flare_range=(2500, 3000))
+
+
+def download_by_obs_ids(observations):
+    """
+    downloads mwa data using a manual list of observation ids
+    """
+    download_mwa_data(observations, path_to_data=get_root_path_to_data())
+
+
+def download_by_flare_overlap(info_path, flare_range=None):
+    """
+    downloads mwa data using flares overlapping with mwa observation times
+    """
+    for use_time_corrected in [True, False]:
+        filename = (
+            "flares_recorded_by_mwa_with_time_correction.csv"
+            if use_time_corrected else
+            "flares_recorded_by_mwa_no_time_correction.csv"
+        )
+        flarelist_path = os.path.join(info_path, filename)
+
+        # auto-generate flare file if missing
+        if not os.path.exists(flarelist_path):
             find_flares_in_mwa.main()
 
-        flare_data = pd.read_csv(os.path.join(info_path, flares_in_mwa))
-        downloaded_ids = get_downloaded_obs_ids(ROOT_PATH_TO_DATA)
+        flare_data = pd.read_csv(flarelist_path)
+
         for i, row in flare_data.iterrows():
-            download_mwa_data_based_on_flare_list(row, downloaded_ids)
-            break
+            if flare_range is None or (flare_range[0] <= i < flare_range[1]):
+                download_mwa_data(row, path_to_data=get_root_path_to_data(), is_flare_row=True)
 
 
-def setup_environment():
-    """Sets up the necessary environment for the project."""
-     # setup project root and load environment variables
-    rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-    load_dotenv()
-    global ROOT_PATH_TO_DATA
-    ROOT_PATH_TO_DATA = Path(os.getenv("ROOT_PATH_TO_DATA", "default/path/to/data"))
-
-
-def download_mwa_data_based_on_observations(observations, avg_time_res, avg_freq_res):
+def download_mwa_data(obs_source, path_to_data, avg_time_res=4, avg_freq_res=160, is_flare_row=False):
     """
-    prepares a list of jobs for given observation id and processes them to download mwa data
+    downloads mwa data based on observation ids or flare row
+    - obs_source: list of obs_ids or a flare row with 'obs_ids' field
+    - path_to_data: path where downloaded data are stored
+    - avg_time_res: time averaging resolution
+    - avg_freq_res: frequency averaging resolution
+    - is_flare_row: set to True if passing a flare row
     """
-    jobs_to_submit = create_jobs(observations, avg_time_res, avg_freq_res)
-    process_mwa_asvo_jobs(jobs_to_submit)
+     # a workaround to avoid an error
+    change_websocket_abnf()
+    
+    if is_flare_row:
+        obs_ids = ast.literal_eval(obs_source['obs_ids'])
+        flare_id = obs_source.get('flare_id', 'unknown')
+    else:
+        obs_ids = obs_source
+        flare_id = None
 
-
-def download_mwa_data_based_on_flare_list(row, downloaded_ids):
-    print(f"Processing flare {row['flare_id']}.")
-    start = time.time()
-
-    obs_ids = ast.literal_eval(row['obs_ids'])
+    downloaded_ids = get_downloaded_obs_ids(path_to_data)
     new_obs_ids = [obs_id for obs_id in obs_ids if obs_id not in downloaded_ids]
 
-    if new_obs_ids:
-        jobs_to_submit = create_jobs(new_obs_ids)
-        if jobs_to_submit:
-            process_mwa_asvo_jobs(jobs_to_submit)
+    if not new_obs_ids:
+        if flare_id:
+            logging.info(f"All observations for flare {flare_id} have already been downloaded.")
+        else:
+            logging.info(f"All observations {new_obs_ids} have already been downloaded.")
+        return
 
-    end = time.time()
-    print(f"All tasks completed for flare {row['flare_id']} in {(end - start) / 60:.2f} minutes!")
+    jobs_to_submit = create_jobs(new_obs_ids, avg_time_res, avg_freq_res)
+
+    if jobs_to_submit:
+        if flare_id:
+            logging.info(f"Submitting {len(jobs_to_submit)} jobs for flare {flare_id}.")
+        else:
+            logging.info(f"Submitting {len(jobs_to_submit)} jobs for observations {new_obs_ids}.")
+        process_mwa_asvo_jobs(jobs_to_submit)
+
+
+def change_websocket_abnf():
+    """
+    This is a workaround to avoid the error "websocket._abnf.ABNF.validate() got an unexpected keyword argument 'skip_utf8_validation'"
+    when using the websocket library.
+    """
+    import websocket._abnf
+    original_validate = websocket._abnf.ABNF.validate
+    def patched_validate(self, skip_utf8_validation):
+        self.rsv1 = 0
+        self.rsv2 = 0
+        self.rsv3 = 0
+        return  # skip everything else
+    websocket._abnf.ABNF.validate = patched_validate
 
 
 def get_downloaded_obs_ids(root_path):
     downloads = os.listdir(root_path)
     return {int(d.split("_")[0]) for d in downloads}
 
-
-def create_jobs(observations, time_resolution, freq_resolution):
-    """
-    creates a list of job specifications for the mwa asvo jobs based on observation ids
-    """
-    return [
-        (
-            'submit_conversion_job_direct',
-            {
-                'obs_id': obs_id,
-                'job_type': 'c',
-                'avg_time_res': time_resolution,
-                'avg_freq_res': freq_resolution,
-                'output': 'ms',
-            }
-        )
-        for obs_id in observations
-    ]
-
-
-def process_mwa_asvo_jobs(jobs):
-    """
-    processes a list of jobs by initializing the settings, submitting, and downloading the results
-    """
-    params, sslopt, verbose = initialize_settings()
-    submit_lock, download_queue, result_queue, status_queue = initialize_queues_and_locks()
-    session, jobs_list = login_and_submit_jobs(params, download_queue, status_queue, jobs)
-    start_status_thread(status_queue)
-    notify = initialize_notifier(params, sslopt, submit_lock, jobs_list, download_queue, result_queue, status_queue, verbose)
-    threads = start_download_threads(submit_lock, jobs_list, download_queue, result_queue, status_queue, session, ROOT_PATH_TO_DATA)
-    results = handle_results(submit_lock, jobs_list, result_queue, download_queue, threads)
-    cleanup(notify, threads, result_queue, status_queue, results)
- 
 
 if __name__ == "__main__":
     main()

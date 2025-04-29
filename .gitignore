@@ -5,3 +5,4 @@ src/z
 .env
 src/_other_functions/
 src/manta-ray-client
+src/plot_new_errors
