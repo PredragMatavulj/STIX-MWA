@@ -201,11 +201,13 @@ def draw_mwa_spectrogram(spec, times, freqs, ax, start_cut, end_cut, time_res=4)
     """
     draws mwa spectrogram using fixed 4s resolution and time-aligned x-axis, including gaps
     """
-     # get first start and last end time, rounded to full seconds
     start_time = safe_parse_time(times[0][0])
+    end_time = safe_parse_time(times[0][1])
+    num_cols = spec.shape[1]
 
-     # number of columns = spec.shape[1], so create time_axis with same length
-    time_axis = [start_time + timedelta(seconds=time_res * i) for i in range(spec.shape[1])]
+     # generate equally spaced time axis between start_time and end_time
+    dt = (end_time - start_time) / (num_cols - 1) if num_cols > 1 else timedelta(seconds=time_res)
+    time_axis = [start_time + i * dt for i in range(num_cols)]
 
     im = ax.imshow(
         spec,
